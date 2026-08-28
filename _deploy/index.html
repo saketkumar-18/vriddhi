@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vriddhi — Self-Improving Trading Agent</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#0a0e14; --card:#111826; --border:#1e2a3a; --fg:#e6edf3;
+          --muted:#8b98a9; --accent:#22d3a7; --accent2:#7aa2f7; --warn:#f7768e; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg);
+         font-family:'Segoe UI',system-ui,sans-serif; padding:24px; }
+  h1 { font-size:22px; font-weight:600; }
+  h1 span { color:var(--accent); }
+  .sub { color:var(--muted); font-size:13px; margin:4px 0 20px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+          gap:12px; margin-bottom:20px; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:10px; padding:14px 16px; }
+  .card .k { color:var(--muted); font-size:11px; text-transform:uppercase;
+             letter-spacing:.06em; }
+  .card .v { font-size:22px; font-weight:600; margin-top:4px; }
+  .pos { color:var(--accent); } .neg { color:var(--warn); }
+  .panel { background:var(--card); border:1px solid var(--border);
+           border-radius:10px; padding:16px; margin-bottom:20px; }
+  .panel h2 { font-size:14px; font-weight:600; margin-bottom:12px;
+              color:var(--accent2); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:right; padding:7px 10px; border-bottom:1px solid var(--border); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:500; font-size:11px;
+       text-transform:uppercase; letter-spacing:.05em; }
+  .chart-wrap { position:relative; height:320px; }
+  .disclaimer { color:var(--muted); font-size:12px; border:1px solid var(--border);
+                border-radius:8px; padding:12px; margin-top:8px; }
+  .badge { display:inline-block; background:#16302a; color:var(--accent);
+           border-radius:20px; padding:2px 10px; font-size:11px; margin-left:8px; }
+</style>
+</head>
+<body>
+<h1>Vriddhi <span>वृद्धि</span> — self-improving paper-trading agent
+  <span class="badge">PAPER ONLY · no real money</span></h1>
+<div class="sub" id="meta">loading report…</div>
+
+<div class="grid" id="kpis"></div>
+
+<div class="panel"><h2>Equity curve — adaptive agent vs static ensemble vs buy-&-hold ($10k start)</h2>
+  <div class="chart-wrap"><canvas id="eq"></canvas></div></div>
+
+<div class="panel"><h2>Performance comparison (walk-forward, fees + slippage included)</h2>
+  <table id="mtable"></table></div>
+
+<div class="panel"><h2>Meta-allocator weights over time (Hedge multiplicative weights)</h2>
+  <div class="chart-wrap"><canvas id="wts"></canvas></div></div>
+
+<div class="panel"><h2>Cumulative PnL by strategy</h2>
+  <div class="chart-wrap"><canvas id="pnl"></canvas></div></div>
+
+<div class="disclaimer">
+  <b>Research artifact, not financial advice.</b> Backtests are hypothetical,
+  assume perfect execution at daily closes, and cannot capture all real-world
+  frictions. Past (even simulated) performance does not guarantee future
+  results. Crypto assets are extremely volatile; you can lose everything.
+  See RISK.md in the repository.
+</div>
+
+<script>
+const fmtPct = x => (x*100).toFixed(1) + '%';
+const fmt = x => isFinite(x) ? x.toFixed(2) : '—';
+fetch('report.json').then(r=>r.json()).then(R => {
+  document.getElementById('meta').textContent =
+    `Universe: ${R.universe.join(', ')} · generated ${R.generated.slice(0,16)} · ` +
+    `ML retrain acceptance rate: ${(R.ml_accept_rate*100).toFixed(0)}%`;
+  const m = R.metrics.agent_adaptive, bh = R.metrics.buy_and_hold;
+  const kpis = [
+    ['Agent CAGR', fmtPct(m.cagr), m.cagr>=0],
+    ['Agent Sharpe', fmt(m.sharpe), m.sharpe>=1],
+    ['Agent Max DD', fmtPct(m.max_dd), false],
+    ['Buy&Hold CAGR', fmtPct(bh.cagr), bh.cagr>=0],
+    ['Win rate', fmtPct(m.win_rate), true],
+    ['Days traded', m.n_days, true],
+  ];
+  document.getElementById('kpis').innerHTML = kpis.map(([k,v,pos]) =>
+    `<div class="card"><div class="k">${k}</div>` +
+    `<div class="v ${pos?'pos':''}">${v}</div></div>`).join('');
+
+  const rows = Object.entries(R.metrics).map(([k,v]) =>
+    `<tr><td>${k.replaceAll('_',' ')}</td><td>${fmtPct(v.cagr)}</td>` +
+    `<td>${fmt(v.sharpe)}</td><td>${fmtPct(v.max_dd)}</td>` +
+    `<td>${fmt(v.calmar)}</td><td>${fmtPct(v.win_rate)}</td></tr>`).join('');
+  document.getElementById('mtable').innerHTML =
+    `<tr><th>variant</th><th>CAGR</th><th>Sharpe</th><th>Max DD</th>` +
+    `<th>Calmar</th><th>Win</th></tr>${rows}`;
+
+  Chart.defaults.color = '#8b98a9';
+  Chart.defaults.borderColor = '#1e2a3a';
+  const dates = Object.keys(R.equity.agent);
+  const thin = (obj) => dates.map(d => parseFloat(obj[d]));
+  new Chart(eq, {type:'line', data:{labels:dates, datasets:[
+    {label:'adaptive agent', data:thin(R.equity.agent), borderColor:'#22d3a7',
+     borderWidth:2, pointRadius:0},
+    {label:'static ensemble', data:thin(R.equity.static), borderColor:'#7aa2f7',
+     borderWidth:1.5, pointRadius:0},
+    {label:'buy & hold', data:thin(R.equity.buy_hold), borderColor:'#565f89',
+     borderWidth:1.5, pointRadius:0, borderDash:[5,4]}]},
+    options:{maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      scales:{x:{ticks:{maxTicksLimit:10}}}}});
+
+  const wDates = Object.keys(R.weights);
+  const names = Object.keys(R.weights[wDates[0]]);
+  const colors = ['#22d3a7','#e0af68','#f7768e','#7aa2f7'];
+  new Chart(wts, {type:'line', data:{labels:wDates,
+    datasets:names.map((n,i)=>({label:n, data:wDates.map(d=>R.weights[d][n]),
+      borderColor:colors[i%4], borderWidth:1.5, pointRadius:0, fill:true,
+      backgroundColor:colors[i%4]+'22'}))},
+    options:{maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      scales:{x:{ticks:{maxTicksLimit:10}}, y:{stacked:false, min:0, max:1}}}});
+
+  const pnlDates = Object.keys(R.strategy_pnl_cum[names[0]]);
+  new Chart(pnl, {type:'line', data:{labels:pnlDates,
+    datasets:names.map((n,i)=>({label:n,
+      data:pnlDates.map(d=>R.strategy_pnl_cum[n][d]*100),
+      borderColor:colors[i%4], borderWidth:1.5, pointRadius:0}))},
+    options:{maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      scales:{x:{ticks:{maxTicksLimit:10}},
+              y:{title:{display:true,text:'cumulative return %'}}}}});
+}).catch(e => {
+  document.getElementById('meta').textContent =
+    'report.json not found — run `python -m vriddhi.experiment` first. ' + e;
+});
+</script>
+</body>
+</html>
