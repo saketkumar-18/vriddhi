@@ -47,8 +47,12 @@ def _fresh_state() -> dict:
 def _load_state(n_strat: int) -> dict:
     if STATE_PATH.exists():
         st = json.loads(STATE_PATH.read_text())
-        # strategy set changed (or corrupt) -> reset rather than misalign
-        if len(st.get("log_weights", [])) != n_strat:
+        lw = st.get("log_weights", [])
+        # Strategy set changed (or corrupt) -> reset rather than misalign.
+        # An EMPTY log_weights list is a valid fresh state: it means the
+        # first tick ran before any weight update happened (last_date was
+        # None), so it must not trigger a reset on the next load.
+        if lw and len(lw) != n_strat:
             return _fresh_state()
         return st
     return _fresh_state()
@@ -78,12 +82,14 @@ def tick() -> dict:
         return {"status": "already_ran", "date": today, "equity": st["equity"]}
 
     alloc = HedgeAllocator(names)
-    alloc.log_weights = np.array(st["log_weights"], dtype=float)
+    # Restore persisted allocator state. In windowed mode the live state is
+    # (_buf, smoothed, eta); log_weights only matters in cumulative mode.
+    # Fresh state has empty lists — keep the constructor's uniform weights
+    # rather than deriving smoothed from an empty log_weights array.
+    if st.get("log_weights"):
+        alloc.log_weights = np.array(st["log_weights"], dtype=float)
     if st.get("smoothed"):
         alloc.smoothed = np.array(st["smoothed"], dtype=float)
-        alloc.smoothed /= alloc.smoothed.sum()
-    else:
-        alloc.smoothed = np.exp(alloc.log_weights)
         alloc.smoothed /= alloc.smoothed.sum()
     alloc._buf = [np.array(r, dtype=float) for r in st.get("reward_buf", [])]
     alloc.eta = st.get("eta", config.HEDGE_ETA)

@@ -89,3 +89,27 @@ def test_ml_walk_forward_no_lookahead():
     # early bars (before enough history) must be flat
     assert sig.iloc[:330].abs().sum() == 0
     assert len(ml.retrain_log) >= 2
+
+
+def test_live_tick_fresh_state(tmp_path, monkeypatch):
+    """Regression: a fresh state file (empty log_weights/smoothed) must not
+    collapse the allocator's smoothed weights to an empty array — the first
+    tick after a strategy-set change has to run with uniform weights."""
+    from vriddhi import live
+
+    class StubML:
+        def signals(self, ohlcv):
+            return pd.Series(0.5, index=ohlcv.index)
+
+    monkeypatch.setattr(live, "STATE_PATH", tmp_path / "live_state.json")
+    monkeypatch.setattr(live, "load_universe", lambda: make_universe())
+    monkeypatch.setattr(live, "WalkForwardML", StubML)
+
+    r = live.tick()
+    assert r["status"] == "ok"
+    assert len(r["weights"]) == 7          # 6 rules + ml
+    assert abs(sum(r["weights"].values()) - 1.0) < 1e-3  # rounded to 4dp
+    assert r["equity"] > 0
+    # second tick on the same date is idempotent
+    r2 = live.tick()
+    assert r2["status"] == "already_ran"
