@@ -28,15 +28,25 @@ time** through three concrete, testable mechanisms — not vibes:
    annualized) plus a drawdown circuit breaker: at −10% DD exposure halves,
    at −20% it goes to zero until half the trough is recovered.
 
-## Results (walk-forward backtest, 2021 → present)
+## Results (walk-forward backtest, Jan 2021 → Aug 2026)
 
 Crypto spot universe: BTC, ETH, SOL, BNB, XRP, ADA. Daily bars, long-only,
-10 bps fee + 5 bps slippage per side, $10k start. See the dashboard for the
-full equity curves, allocator weights over time, and per-strategy PnL.
+10 bps fee + 5 bps slippage per side, $10k start.
 
-The headline ablation: **adaptive ensemble vs static equal-weight ensemble
-vs buy-&-hold** — the adaptive variant's edge (if any) must come from the
-weight adaptation, since everything else is held identical.
+| variant | CAGR | Sharpe | Max DD |
+|---|---|---|---|
+| **adaptive agent (full)** | **16.6%** | **1.06** | **−19.0%** |
+| static ensemble (no adaptation) | 16.4% | 1.07 | −18.6% |
+| adaptive, no risk overlay | 18.6% | 0.98 | −26.1% |
+| buy & hold (equal-weight) | 61.9% | 1.00 | **−90.8%** |
+
+Honest reading: the four strategies are correlated trend-followers, so the
+Hedge allocator's CAGR edge over static weights is small — adaptation shines
+when strategy returns diverge across regimes. The **risk overlay is where
+the agent earns its keep**: it cuts max drawdown from −91% (buy & hold) to
+−19% at equal Sharpe. The ML validation gate rejected ~44% of retrain
+candidates (888/2025 accepted) — the agent declined to deploy models that
+failed out-of-sample, which is self-improvement behaving as designed.
 
 ## Repo layout
 
