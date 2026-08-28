@@ -21,10 +21,17 @@ WARMUP = 60           # bars needed before strategies emit signals
 REBALANCE_EVERY = 1   # days
 
 # --- Meta-allocator (Hedge) ---
-HEDGE_ETA = 0.10      # learning rate for multiplicative weights
-HEDGE_LOOKBACK = 63   # bars of strategy PnL used for weight updates
+HEDGE_ETA = 0.25      # base learning rate for multiplicative weights
+HEDGE_LOOKBACK = 63   # window (bars) of strategy PnL driving the weights
+HEDGE_WINDOWED = True # fixed-window Hedge: forget performance before window
 MIN_WEIGHT = 0.05     # floor so no strategy is fully killed
-WEIGHT_SMOOTH = 0.5   # EMA smoothing applied to raw hedge weights
+WEIGHT_SMOOTH = 0.3   # EMA smoothing applied to raw hedge weights
+
+# --- Meta-learning: allocator self-tunes eta from ranking persistence ---
+META_LEARN = True
+ETA_MIN = 0.05        # when strategy rankings flip constantly, chase softly
+ETA_MAX = 0.60        # when rankings persist, chase hard
+RANK_PERSISTENCE_WINDOW = 42  # bars over which rank autocorrelation is measured
 
 # --- ML strategy ---
 ML_RETRAIN_EVERY = 21       # bars between walk-forward retrains

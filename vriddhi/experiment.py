@@ -1,4 +1,13 @@
-"""Run the full experiment: ML signals, ablation backtests, report dump."""
+"""Run the full experiment: ML signals, ablation backtests, report dump.
+
+Ablation design (v2 — decorrelated strategies + meta-learning):
+  * adaptive_full      — full agent on the whole sample
+  * static_full        — equal-weight ensemble, same strategies (isolates the
+                         value of weight adaptation)
+  * adaptive_no_meta   — adaptive but eta fixed (isolates meta-learning)
+  * same three on a trailing-2-year OUT-OF-TIME holdout, so no variant can
+    be credited with performance it was tuned on.
+"""
 from __future__ import annotations
 
 import json
@@ -9,7 +18,10 @@ import pandas as pd
 from . import config
 from .backtest import buy_and_hold, run_backtest
 from .data import load_universe
+from .metrics import metrics as M
 from .ml_strategy import WalkForwardML
+
+HOLDOUT_DAYS = 730
 
 
 def main() -> None:
@@ -17,9 +29,10 @@ def main() -> None:
     print("[exp] fetching universe...")
     universe = load_universe()
     symbols = list(universe.keys())
-    print(f"[exp] symbols: {symbols}, bars: {len(next(iter(universe.values())))}")
+    n_bars = len(next(iter(universe.values())))
+    print(f"[exp] symbols: {symbols}, bars: {n_bars}")
 
-    print("[exp] walk-forward ML signals (this retrains ~90 times)...")
+    print("[exp] walk-forward ML signals...")
     ml = WalkForwardML()
     ml_signals = {}
     for s in symbols:
@@ -29,53 +42,87 @@ def main() -> None:
     accept_rate = (sum(r['accepted'] for r in ml.retrain_log)
                    / max(len(ml.retrain_log), 1))
 
-    print("[exp] backtest: adaptive ensemble (full agent)...")
-    full = run_backtest(universe, ml_signals, adaptive=True, use_risk=True)
-    print("[exp] backtest: static equal-weight ensemble (no self-improvement)...")
-    static = run_backtest(universe, ml_signals, adaptive=False, use_risk=True)
-    print("[exp] backtest: adaptive, no risk overlay...")
-    norisk = run_backtest(universe, ml_signals, adaptive=True, use_risk=False)
-    bh = buy_and_hold(universe)
-    from .metrics import metrics as M
-    bh_m = M(bh)
+    def run_suite(tag: str, uni: dict, mls: dict) -> dict:
+        print(f"[exp] backtest suite: {tag}...")
+        res = {
+            "adaptive": run_backtest(uni, mls, adaptive=True, use_risk=True,
+                                     meta_learn=True),
+            "static": run_backtest(uni, mls, adaptive=False, use_risk=True),
+            "adaptive_no_meta": run_backtest(uni, mls, adaptive=True,
+                                             use_risk=True, meta_learn=False),
+        }
+        res["buy_hold"] = buy_and_hold(uni)
+        return res
 
-    rows = {"agent_adaptive": full["metrics"],
-            "static_ensemble": static["metrics"],
-            "adaptive_no_risk": norisk["metrics"],
-            "buy_and_hold": bh_m}
-    print("\n=== RESULTS ===")
-    for k, m in rows.items():
+    full = run_suite("full sample", universe, ml_signals)
+
+    # out-of-time holdout: trailing 2 years, signals recomputed on the slice
+    cut = next(iter(universe.values())).index[-HOLDOUT_DAYS]
+    uni_h = {s: df.loc[df.index >= cut] for s, df in universe.items()}
+    ml_h = WalkForwardML()
+    mls_h = {s: ml_h.signals(uni_h[s]) for s in symbols}
+    hold = run_suite("trailing-2yr holdout", uni_h, mls_h)
+
+    def mrow(res: dict) -> dict:
+        return {
+            "adaptive": res["adaptive"]["metrics"],
+            "static": res["static"]["metrics"],
+            "adaptive_no_meta": res["adaptive_no_meta"]["metrics"],
+            "buy_hold": M(res["buy_hold"]),
+        }
+
+    rows_full, rows_hold = mrow(full), mrow(hold)
+    print("\n=== FULL SAMPLE ===")
+    for k, m in rows_full.items():
         print(f"{k:20s} CAGR={m['cagr']*100:7.2f}%  Sharpe={m['sharpe']:6.2f}  "
-              f"MaxDD={m['max_dd']*100:7.2f}%  Win={m['win_rate']*100:5.1f}%")
+              f"MaxDD={m['max_dd']*100:7.2f}%")
+    print("\n=== TRAILING-2YR HOLDOUT (out-of-time) ===")
+    for k, m in rows_hold.items():
+        print(f"{k:20s} CAGR={m['cagr']*100:7.2f}%  Sharpe={m['sharpe']:6.2f}  "
+              f"MaxDD={m['max_dd']*100:7.2f}%")
 
-    # persist everything the dashboard needs
+    # adaptation gap: how much did weights actually move this time?
+    wf = full["adaptive"]["weights"]
+    wstats = {c: {"start": round(float(wf[c].iloc[0]), 3),
+                  "end": round(float(wf[c].iloc[-1]), 3),
+                  "min": round(float(wf[c].min()), 3),
+                  "max": round(float(wf[c].max()), 3)} for c in wf.columns}
+    leader_changes = int((wf.values.argmax(axis=1)[1:]
+                          != wf.values.argmax(axis=1)[:-1]).sum())
+
     out = {
         "generated": str(pd.Timestamp.now("UTC")),
         "universe": symbols,
-        "metrics": rows,
+        "metrics": rows_full,
+        "metrics_holdout": rows_hold,
         "ml_accept_rate": accept_rate,
-        "equity": {
-            "agent": full["equity"].round(2).astype(str).to_dict(),
-            "static": static["equity"].round(2).astype(str).to_dict(),
-            "buy_hold": bh.round(2).astype(str).to_dict(),
-        },
-        "weights": full["weights"].round(4).to_dict(),
-        "strategy_pnl_cum": full["strategy_pnl"].cumsum().round(4).to_dict(),
+        "weight_stats": wstats,
+        "leader_changes": leader_changes,
+        "eta": {str(i): round(float(v), 4)
+                for i, v in full["adaptive"]["eta"].items()},
+        "equity": {},
+        "weights": {},
+        "strategy_pnl_cum": {},
         "ml_retrain_log": ml.retrain_log[-20:],
     }
-    # convert timestamps in keys to strings
-    for key in ("equity",):
-        out[key] = {k: {str(i): v for i, v in d.items()}
-                    for k, d in out[key].items()}
-    w_cols = out["weights"]  # {strategy: {Timestamp: weight}}
-    out["weights"] = {}
-    for c, inner in w_cols.items():
-        for i, v in inner.items():
-            out["weights"].setdefault(str(i), {})[c] = v
-    out["strategy_pnl_cum"] = {c: {str(i): v for i, v in inner.items()}
-                               for c, inner in out["strategy_pnl_cum"].items()}
+    for label, res in (("full", full), ("holdout", hold)):
+        eq = {"agent": res["adaptive"]["equity"],
+              "static": res["static"]["equity"],
+              "buy_hold": res["buy_hold"]}
+        out["equity"][label] = {k: {str(i): str(round(float(v), 2))
+                                    for i, v in d.items()}
+                                for k, d in eq.items()}
+    w = full["adaptive"]["weights"]
+    for i, row in w.iterrows():
+        out["weights"][str(i)] = {c: round(float(v), 4) for c, v in row.items()}
+    pnl = full["adaptive"]["strategy_pnl"].cumsum()
+    out["strategy_pnl_cum"] = {c: {str(i): round(float(v), 4)
+                                   for i, v in pnl[c].items()}
+                               for c in pnl.columns}
     (config.REPORT_DIR / "report.json").write_text(json.dumps(out))
-    print(f"\n[exp] report -> {config.REPORT_DIR / 'report.json'}")
+    print(f"\n[exp] weight stats: {json.dumps(wstats, indent=1)}")
+    print(f"[exp] leader changes: {leader_changes}")
+    print(f"[exp] report -> {config.REPORT_DIR / 'report.json'}")
 
 
 if __name__ == "__main__":
