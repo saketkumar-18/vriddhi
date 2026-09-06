@@ -3,6 +3,8 @@
 > **Paper trading only.** This is a research artifact. No real orders are
 > ever placed. Read [RISK.md](RISK.md) before believing anything here.
 
+**Live dashboard:** https://vriddhi-trading-agent.vercel.app — the running paper-trading agent's state, refreshed by the daily 08:00 IST cycle.
+
 Vriddhi is an ensemble trading agent whose allocation **improves itself over
 time** through three concrete, testable mechanisms — not vibes.
 
